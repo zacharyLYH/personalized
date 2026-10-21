@@ -1,0 +1,624 @@
+# Local Fine-Tuning Workbench — Project Specification
+
+## 1. Product vision
+
+Build a local workbench for fine-tuning language models, designed to be practical, observable, reproducible, and educational.
+
+**Primary goal:** Learn how modern fine-tuning works, one abstraction layer below ordinary software engineering, while building a tool I can reuse for different fine-tuning tasks.
+
+The first end-to-end use case is fine-tuning a model to imitate my speaking and writing style using my own ChatGPT conversations. However, the underlying system should support other supervised fine-tuning tasks without requiring a rewrite.
+
+### Core workflow
+
+**Choose task → Import data → Prepare dataset → Configure training → Train → Evaluate → Use the fine-tuned model**
+
+The workbench should handle the repeatable ML infrastructure. Task-specific behavior should live in replaceable dataset preparation and evaluation components.
+
+### Success criteria
+
+* Fine-tune a small language model locally using LoRA.
+* Turn supported raw data sources into training-ready datasets.
+* Support multiple supervised fine-tuning tasks through a shared training workflow.
+* Evaluate whether fine-tuning actually improved the intended behavior.
+* Save, reload, and use the resulting model or adapter.
+* Reproduce previous runs from recorded configurations.
+* Understand what each major component does and why it exists.
+
+## 2. Scope and non-goals
+
+### In scope
+
+* Local supervised fine-tuning (SFT).
+* Hugging Face-based training with LoRA.
+* Dataset import, transformation, normalization, and validation.
+* Task-specific dataset preparation.
+* A shared training engine for supported SFT tasks.
+* Task-appropriate evaluation.
+* Training progress, logging, checkpoints, and saved artifacts.
+* A keyboard-driven terminal UI.
+* A small Python API beneath the UI.
+* Speaking-style imitation as the first complete use case.
+
+### Out of scope initially
+
+* Implementing neural networks, backpropagation, optimizers, tensor operations, or GPU kernels.
+* Training foundation models from scratch.
+* Supporting every model architecture, device, or training method.
+* Distributed or multi-GPU training.
+* A hosted service or web UI.
+* Building a custom training framework or TUI library.
+* Supporting every conceivable dataset format.
+* Preference optimization, reward modeling, and other fundamentally different training objectives.
+* Automatically rewriting or synthesizing large datasets without review.
+* Building a universal plugin framework before multiple use cases demonstrate the need.
+
+## 3. Technology choices
+
+| Component                  | Choice                    | Responsibility                          |
+| -------------------------- | ------------------------- | --------------------------------------- |
+| Language                   | Python                    | Application and ML workflow             |
+| TUI                        | Textual                   | Terminal interface                      |
+| ML framework               | PyTorch                   | Tensor computation and device execution |
+| Model loading              | Hugging Face Transformers | Model, tokenizer, and inference         |
+| Training                   | Hugging Face TRL          | Supervised fine-tuning                  |
+| Parameter-efficient tuning | Hugging Face PEFT         | LoRA adapters                           |
+| Initial dataset format     | JSONL                     | Normalized training examples            |
+
+Pin working dependency versions once the initial environment is verified.
+
+Use established libraries for their intended purposes. Do not implement a second version of functionality already provided by the chosen stack.
+
+### Hardware policy
+
+First inspect the actual development machine and supported PyTorch device. Choose a small model that can realistically run on that machine.
+
+Use supported execution paths provided by the selected libraries. Report the detected device and actionable compatibility errors. Do not promise universal hardware compatibility or build a hardware abstraction framework.
+
+## 4. General-purpose architecture
+
+The system should separate task-specific data preparation from reusable training infrastructure.
+
+### High-level workflow
+
+**Data source → Dataset adapter → Task definition → Shared training engine → Evaluation → Artifacts**
+
+The TUI coordinates these steps and presents their state to the user.
+
+### 4.1 Dataset adapters
+
+A dataset adapter converts a supported source into a normalized training dataset.
+
+Examples:
+
+* Chat-history export adapter.
+* JSONL or CSV adapter.
+* Future adapters for other structured datasets.
+
+An adapter may parse records, map fields, construct examples, filter records, and preserve source metadata.
+
+The adapter should not own model loading, training execution, or checkpoint management.
+
+### 4.2 Task definition
+
+A task definition describes what the model is supposed to learn and how examples should be interpreted.
+
+Depending on the task, it may specify:
+
+* Input and target structure.
+* Example construction rules.
+* Expected output format.
+* Which tokens contribute to the training loss.
+* Task-specific training configuration.
+* Appropriate evaluation procedure and metrics.
+
+The first implementation should support the needs of supervised fine-tuning without attempting to model every possible ML objective.
+
+**Important:** A new task should be able to reuse the shared training engine when its requirements fit the supported SFT workflow. A task that requires a different training objective may need a separate training recipe.
+
+### 4.3 Shared training engine
+
+Owns the common mechanics:
+
+* Model and tokenizer loading.
+* Training configuration.
+* LoRA setup.
+* Trainer construction and execution.
+* Progress reporting and loss logging.
+* Checkpointing and recovery where supported.
+* Artifact saving.
+* Run metadata.
+
+It should consume prepared data and an explicit task/training configuration rather than assuming every dataset represents a user-assistant conversation.
+
+### 4.4 Evaluation
+
+Evaluation uses a shared execution and result-recording mechanism, with task-specific tests and metrics.
+
+Reusable infrastructure:
+
+* Load base and fine-tuned models.
+* Execute test inputs.
+* Save outputs and configuration.
+* Compare results.
+* Present findings in the TUI.
+
+Task-specific behavior:
+
+* Test-case construction.
+* Expected output or reference data.
+* Metrics and scoring.
+* Human-review criteria.
+
+A lower training loss does not, by itself, prove that the model improved.
+
+### 4.5 TUI
+
+Use Textual, an existing TUI library. We are building the application, not the UI framework.
+
+The TUI should grow alongside the ML workflow, providing visible verification throughout development.
+
+It should call the same underlying functions used by tests and scripts. It should not contain a separate implementation of training or data processing.
+
+### 4.6 Run management
+
+Record:
+
+* Task and configuration.
+* Dataset identity and relevant provenance.
+* Model and tokenizer identifiers.
+* Library and dependency versions.
+* Training progress and status.
+* Checkpoint and artifact locations.
+* Evaluation configuration and results.
+
+Keep run management shared across supported tasks.
+
+### 4.7 Abstraction policy
+
+Generalize only where real variation exists.
+
+* Build the first task end to end.
+* Introduce a clear boundary between data preparation and training.
+* Reuse the training engine where the training objective is compatible.
+* Add new task definitions when another use case requires different input/target or evaluation behavior.
+* Avoid a generic plugin system, dynamic registry, or extensive configuration framework until justified.
+
+## 5. First use case: speaking-style imitation
+
+The first task is to fine-tune a model to generate messages resembling my natural writing style, using my ChatGPT conversation history.
+
+Potential characteristics to learn:
+
+* Casual and concise phrasing.
+* Vocabulary, sentence structure, and punctuation.
+* How I express uncertainty, disagreement, and pushback.
+* How I ask follow-up questions.
+* How I refine ideas across multiple turns.
+* How I challenge unnecessary complexity.
+* My characteristic conversational habits.
+
+These are properties to evaluate, not rigid rules to impose on every response.
+
+### 5.1 Data-design challenge
+
+My chat history contains my actual messages, which provide target outputs. The corresponding input must provide enough context to make those messages meaningful.
+
+The default method is **conversational continuation**.
+
+For each selected message I wrote:
+
+* **Input:** the relevant conversation preceding my message.
+* **Target:** my original message, preserved as written.
+
+Example:
+
+Input:
+
+* User: I want to build a coding agent accessible from my phone.
+* Assistant: You could build a full orchestration platform with several services.
+
+Target:
+
+* User: Hmm maybe this is too complex and unnecessary. We are being scrappy here, so engineering a beautiful seamless UX seems overkill?
+
+This teaches the model to continue a conversation in my style rather than merely imitate isolated sentences.
+
+### 5.2 Synthetic context
+
+Some messages may not have enough useful preceding context. For selected examples, an LLM may generate a plausible prompt or conversational context that could naturally elicit the original message.
+
+Requirements:
+
+* Preserve the original message as the target.
+* Mark generated context as synthetic.
+* Do not present synthetic context as historical fact.
+* Review samples for invented assumptions and distorted intent.
+* Keep synthetic examples identifiable for filtering and evaluation.
+
+Synthetic generation is optional and should not block the first working training run.
+
+### 5.3 Dataset selection
+
+Prefer:
+
+* Meaningful messages that demonstrate writing habits.
+* Diverse topics and conversational situations.
+* Examples with sufficient context.
+* Messages representative of the style I want the model to reproduce.
+
+Filter or flag:
+
+* Fragments that remain unintelligible even with context.
+* Duplicates and excessive near-duplicates.
+* Private information that should not be incorporated into model weights.
+* Messages I do not want the model to imitate.
+* Assistant messages mistakenly selected as targets.
+* Examples whose context or target cannot be reconstructed reliably.
+
+Short messages are not inherently bad. Follow-ups such as "why?" or "what about X?" can be useful when their preceding context is preserved.
+
+### 5.4 Training and loss masking
+
+Use supervised fine-tuning with LoRA.
+
+For this use case, the model should learn to generate my selected messages from preceding conversation context. The target message must be explicitly identified, and the training loss should be applied to the intended target tokens rather than indiscriminately to all context tokens.
+
+Verify the selected TRL trainer's actual loss-masking behavior. Do not assume that a standard chat template automatically implements the desired objective.
+
+### 5.5 Privacy
+
+Chat histories may contain personal, sensitive, or third-party information.
+
+* Preserve source files without modifying them.
+* Let the user filter or exclude examples.
+* Avoid embedding unnecessary personal details in model weights.
+* Keep source references available for review.
+* Make dataset contents inspectable before training.
+
+## 6. Dataset system
+
+### 6.1 Canonical representation
+
+Use a normalized representation suited to the selected task. For chat-based SFT, use structured messages with roles and content.
+
+Example:
+
+```
+{"messages":[{"role":"user","content":"Explain recursion simply."},{"role":"assistant","content":"Recursion is when a function calls itself to solve a smaller version of the same problem."}]}
+```
+
+For speaking-style imitation, the target is my original user message. The task adapter and trainer configuration must explicitly support that target structure.
+
+Other tasks may need different canonical fields. Do not force every task into a chat-message schema if it does not fit.
+
+### 6.2 Metadata
+
+Keep metadata separate from the model input where appropriate.
+
+Potential fields:
+
+* Source dataset and conversation identifiers.
+* Source message position.
+* Historical versus synthetic context.
+* Review status.
+* Filtering decisions.
+* Task identifier.
+
+Metadata supports traceability and dataset management; it should not automatically become part of the training text.
+
+### 6.3 Import and normalization
+
+The initial implementation should support a bounded set of common structured formats, beginning with an actual ChatGPT conversation export and normalized JSONL.
+
+The normalizer should:
+
+1. Parse the supported source format.
+2. Identify relevant fields and message roles.
+3. Preserve ordering and original text.
+4. Construct task-specific examples.
+5. Validate required fields and structures.
+6. Detect duplicates and flag unusable records.
+7. Allow review and filtering.
+8. Save normalized output as a new artifact.
+
+CSV and additional schemas can be added when there is a concrete use case.
+
+Automate structural cleanup, not semantic guesswork. Do not silently invent missing information or rewrite examples without explicit authorization.
+
+## 7. Training API
+
+Eventually, expose a small programmatic interface conceptually like:
+
+```
+train(task=..., model=..., dataset=..., output=...)
+```
+
+This is a target interface, not a requirement to build a universal training framework immediately.
+
+The API should:
+
+* Accept a prepared dataset and task/training configuration.
+* Invoke the shared engine for supported SFT recipes.
+* Report progress and status.
+* Save artifacts and run metadata.
+* Return structured results and errors.
+
+Task-specific preparation should happen before calling the shared training engine.
+
+Add parameters and abstractions only when actual use cases require them.
+
+## 8. Implementation plan
+
+Each milestone should produce a working, testable result. The TUI develops alongside the ML workflow, not after all ML functionality is complete.
+
+### M0 — Environment and first inference
+
+Build:
+
+* Python environment and dependency setup.
+* Basic hardware/device detection.
+* Load a small, suitable model and tokenizer.
+* Minimal Textual screen showing device, loading status, and generated output.
+
+Acceptance:
+
+* Setup is reproducible.
+* Model inference works.
+* Device reporting is accurate.
+* The UI remains usable during loading and inference.
+
+### M1 — First supervised fine-tuning run
+
+Build:
+
+* A tiny manually prepared dataset for conversational continuation.
+* Minimal TRL SFT + PEFT LoRA training.
+* Adapter saving and reloading.
+* Basic progress and loss display in the TUI.
+
+Acceptance:
+
+* A training run completes on the available machine.
+* The adapter reloads successfully.
+* Inference works after fine-tuning.
+* Loss is visible but not treated as proof of improvement.
+
+### M2 — Shared training interface
+
+Build:
+
+* A small reusable training function.
+* Explicit task and training configuration.
+* A common progress/status reporting mechanism.
+* TUI integration through the same interface.
+
+Acceptance:
+
+* Training can be invoked by the UI and by tests.
+* The training engine does not hardcode speaking-style-specific data construction.
+* Unsupported configurations fail clearly.
+
+### M3 — Chat-history import
+
+Build:
+
+* Support for one actual ChatGPT export format.
+* Parse conversations, roles, ordering, and message content.
+* Create fixtures for representative inputs.
+
+Acceptance:
+
+* Original message text and ordering are preserved.
+* Unsupported or malformed records produce understandable errors.
+* Original files remain untouched.
+
+### M4 — Task-specific example construction
+
+Build:
+
+* Extract my messages as targets.
+* Attach preceding conversation context.
+* Apply an initial, configurable context-window policy.
+* Exclude unusable examples with explanations.
+* Preserve source references.
+
+Acceptance:
+
+* Each example has a clear input and target.
+* The target is my original message.
+* Future messages never leak into historical input context.
+* Construction can be inspected and tested.
+
+### M5 — Normalization, validation, and review
+
+Build:
+
+* Normalized JSONL output for the initial task.
+* Structural validation and duplicate detection.
+* Basic filtering and dataset statistics.
+* TUI preview of context and target.
+* Save normalized data as a separate artifact.
+
+Acceptance:
+
+* Output conforms to the task's expected schema.
+* Invalid records include useful source information.
+* The user can review examples before training.
+* Filtering decisions and counts are visible.
+
+### M6 — Resource checks and failure handling
+
+Build:
+
+* Basic model/device/configuration compatibility checks.
+* Conservative defaults.
+* Actionable errors for common problems.
+
+Acceptance:
+
+* Common preventable errors are caught early.
+* Unsupported configurations are reported honestly.
+* No custom hardware abstraction layer is introduced.
+
+### M7 — Run tracking and recovery
+
+Build:
+
+* Run directories and configuration snapshots.
+* Logs and dependency/version information.
+* Checkpoints and resume support where supported.
+* TUI status for completed, failed, and resumable runs.
+
+Acceptance:
+
+* Run configuration and outputs are inspectable.
+* Compatible checkpoints can be resumed.
+* Intermediate checkpoints are distinguishable from final artifacts.
+
+### M8 — Evaluation and style comparison
+
+Build:
+
+* Held-out conversations excluded from training.
+* Identical test contexts for base and fine-tuned models.
+* Saved generations and side-by-side comparison.
+* Human review of writing-style similarity.
+
+Evaluate:
+
+* Natural phrasing.
+* Characteristic vocabulary and sentence structure.
+* Conversational continuation.
+* Appropriate short follow-ups and disagreement.
+* Overuse of superficial catchphrases.
+* General response quality regressions.
+
+Acceptance:
+
+* Both models receive the same test inputs.
+* Evaluation data is not used in training.
+* Outputs are saved for inspection.
+* Conclusions are based on evidence, not training loss alone.
+
+### M9 — Artifact management and end-to-end workflow
+
+Build:
+
+* Reliable adapter/config saving.
+* Base-model references.
+* Inference smoke tests.
+* Output locations and run summaries.
+* Complete TUI workflow from import through evaluation.
+
+Acceptance:
+
+* The full workflow can be completed without manually editing intermediate files.
+* Saved adapters can be reloaded and used.
+* Runs are traceable to their datasets and configurations.
+
+### M10 — Second task validation
+
+After the first use case works, implement one additional supervised fine-tuning task with meaningfully different data preparation or evaluation requirements.
+
+Use it to test whether the current boundaries are sufficient.
+
+Acceptance:
+
+* The new task can reuse the shared training engine where appropriate.
+* Task-specific preparation remains outside the shared engine.
+* Task-specific evaluation works without duplicating common execution infrastructure.
+* Any new abstraction is justified by concrete differences between the two tasks.
+
+Do not implement this milestone before the first end-to-end workflow is working.
+
+### M11 — Usability polish
+
+Refine navigation, previews, errors, defaults, and workflow efficiency based on actual use. Improve the TUI incrementally throughout earlier milestones.
+
+## 9. Testing strategy
+
+### Dataset tests
+
+* Preserve original message text and order.
+* Construct correct context/target pairs.
+* Prevent future-turn leakage.
+* Handle missing and unsupported roles.
+* Detect malformed records and duplicates.
+* Verify filtering, normalization, and source traceability.
+* Distinguish historical and synthetic context.
+
+### Training tests
+
+* Verify model loading and inference.
+* Run a tiny training job.
+* Verify adapter saving and reloading.
+* Confirm intended loss masking.
+* Verify progress reporting and failure handling.
+
+### Evaluation tests
+
+* Use identical inputs for both models.
+* Keep evaluation data separate from training.
+* Save outputs and configuration.
+* Avoid unsupported improvement claims.
+
+### Generalization tests
+
+* Verify the second task can use shared training infrastructure.
+* Identify any genuinely task-specific training requirements.
+* Avoid generalizing hypothetical requirements that no implemented task uses.
+
+Use small fixtures and models to keep tests cheap enough to run frequently.
+
+## 10. Learning and implementation workflow
+
+This project is also a learning exercise. AI can help write code, but I should understand the important design decisions and ML concepts.
+
+For each increment:
+
+1. Explain the problem and intended behavior.
+2. Agree on the smallest useful implementation.
+3. Explain unfamiliar concepts before introducing complex code.
+4. Implement only that increment.
+5. Explain what the code does and its assumptions.
+6. Run tests or a small real example.
+7. Review against explicit acceptance criteria.
+8. Proceed when the current step works or its limitations are understood.
+
+Do not generate the whole project in one large coding prompt.
+
+Prefer first-principles explanations, concrete examples, and clear links between data preparation, training behavior, and observed results.
+
+## 11. Engineering principles
+
+* **Reuse before reimplementing:** let established libraries handle ML mechanics.
+* **Generalize from evidence:** build one task first, then validate the architecture with another.
+* **Incremental delivery:** every milestone produces something testable.
+* **Visible verification:** the TUI grows alongside the workflow.
+* **Separation of concerns:** data preparation, training, evaluation, and presentation have clear responsibilities.
+* **Conservative automation:** automate known structures and request review when meaning is ambiguous.
+* **Data provenance:** keep source references and filtering decisions.
+* **Preserve originals:** transformations produce new artifacts.
+* **Reproducibility:** record configurations, versions, and outputs.
+* **Honest evaluation:** decreasing loss does not guarantee improvement.
+* **No premature abstraction:** build only what demonstrated use cases require.
+* **Privacy awareness:** review and filter personal data before incorporating it into model weights.
+
+## 12. Definition of done
+
+The initial workbench is complete when I can:
+
+1. Launch the TUI.
+2. Import a supported ChatGPT conversation export.
+3. Construct context-to-target examples from my actual messages.
+4. Review, filter, validate, and normalize the dataset.
+5. Configure and run local LoRA fine-tuning.
+6. Monitor training progress.
+7. Save and reload the resulting adapter.
+8. Compare base and fine-tuned outputs on held-out conversations.
+9. Inspect results and judge whether the model better reproduces my speaking style.
+10. Reproduce a run from its recorded configuration.
+
+The architecture is validated for general-purpose supervised fine-tuning when a second task with different data preparation or evaluation requirements can reuse the shared infrastructure without forcing unrelated tasks into the speaking-style workflow.
+
+The goal is a reusable and understandable workbench—not a universal ML framework. Expand only when real use cases justify it.
